@@ -1,8 +1,11 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+from scipy.stats import norm
+import io
 
 # Sayfa Yapılandırması
-st.set_page_config(page_title="Ecza Deposu Stok Paneli", layout="wide")
+st.set_page_config(page_title="Ecza Deposu Stok & Bütçe Paneli", layout="wide")
 
 # --- 1. ŞİFRE EKRANI ---
 def check_password():
@@ -23,70 +26,160 @@ def check_password():
         return False
     return True
 
-# --- 2. ANA UYGULAMA ---
 if check_password():
-    st.title("📊 Stok Seviyesi ve Bütçe Projeksiyon Paneli")
-    st.markdown("Excel dosyanızı yükleyerek 6 Milyar TL sınırına göre stok ve hedef analizini anlık yapabilirsiniz.")
+    st.title("📊 Ecza Deposu Stok Seviyesi & Bütçe Optimizasyon Paneli")
+    st.markdown("Excel dosyanızı yükleyin, hedef bütçenizi (ör. 6.2 Milyar TL) girin ve A-B-C-D-E sınıflarına göre emniyet seviyelerini anında hesaplayın.")
     
-    # Sol Menü - Bütçe Kontrolleri
-    st.sidebar.header("⚙️ Bütçe ve Hedef Parametreleri")
-    toplam_butce_siniri = st.sidebar.number_input("Maksimum Bütçe Sınırı (TL)", value=6000000000, step=100000000, format="%d")
-    ideal_hedef_butce = st.sidebar.number_input("İdeal Hedef Bütçe (TL)", value=5800000000, step=100000000, format="%d")
-    
-    # Dosya Yükleme Alanı
-    st.markdown("### 📄 Dosya Yükleme")
-    uploaded_file = st.file_uploader(" 'Emniyet Seviyesi' Excel dosyasını buraya sürükleyin veya seçin", type=["xlsx", "xls"])
+    # --- 2. DOSYA YÜKLEME ---
+    st.markdown("### 📄 1. Excel Dosyasını Yükleyin")
+    uploaded_file = st.file_uploader("'Emniyet Seviyesi' Excel dosyasını seçin", type=["xlsx", "xls"])
     
     if uploaded_file is not None:
         try:
-            # Excel'i okuma (Başlıklar 7. satırda olduğu için skiprows=6)
+            # Excel Okuma
             df = pd.read_excel(uploaded_file, sheet_name='Stok seviyesi', skiprows=6)
             
-            # Gerekli sütunlar
-            beklenen_sutunlar = ['Ürün Kodu', 'Ürün', 'Firma', 'Kademe', 'Emniyet Seviyesi', 'Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL', 'Alış Vades']
-            mevcut_sutunlar = [col for col in beklenen_sutunlar if col in df.columns]
-            df = df[mevcut_sutunlar].dropna(subset=['Ürün Kodu'])
+            # Sütun isimlerindeki gizli boşlukları temizleme
+            df.columns = df.columns.astype(str).str.strip()
+            df = df.dropna(subset=['Ürün Kodu']).copy()
             
-            # Toplam Finansal Metrikler
-            toplam_stok = df['Stok TL'].sum() if 'Stok TL' in df.columns else 0
-            toplam_hedef = df['Hedef TL'].sum() if 'Hedef TL' in df.columns else 0
-            toplam_fazla = df['Fazla TL'].sum() if 'Fazla TL' in df.columns else 0
+            # Sayısal sütunları temizleme
+            numeric_cols = ['Emniyet Seviyesi', 'Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL', 'Alış Vades']
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
-            st.success("✅ Excel dosyası başarıyla işlendi ve güncellendi.")
+            # Mevcut Toplamlar
+            mevcut_stok = df['Stok TL'].sum() if 'Stok TL' in df.columns else 0
+            mevcut_hedef = df['Hedef TL'].sum() if 'Hedef TL' in df.columns else 0
+            mevcut_min = df['Min TL'].sum() if 'Min TL' in df.columns else 0
+            mevcut_optimum = df['Optimum TL'].sum() if 'Optimum TL' in df.columns else 0
+            mevcut_fazla = df['Fazla TL'].sum() if 'Fazla TL' in df.columns else 0
             
-            # Özet Göstergeler (KPI Cards)
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Mevcut Stok Tutarı", f"{toplam_stok:,.0f} ₺")
-            c2.metric("Sistem Hedef Tutarı", f"{toplam_hedef:,.0f} ₺")
-            c3.metric("Kalan Bütçe (6 Milyar Sınırı)", f"{toplam_butce_siniri - toplam_stok:,.0f} ₺")
-            c4.metric("Toplam Atıl (Fazla) Stok", f"{toplam_fazla:,.0f} ₺")
+            st.success("✅ Excel dosyası başarıyla yüklendi ve tüm sütunlar okundu.")
             
-            # Risk ve Bütçe Durumu Uyarı Alanı
+            # --- 3. MEVCUT DURUM GÖSTERGELERİ ---
+            st.markdown("#### 📌 Yüklenen Dosyaya Göre Mevcut Stok Durumu")
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Mevcut Stok TL", f"{mevcut_stok:,.0f} ₺".replace(",", "."))
+            m2.metric("Mevcut Min TL", f"{mevcut_min:,.0f} ₺".replace(",", "."))
+            m3.metric("Mevcut Optimum TL", f"{mevcut_optimum:,.0f} ₺".replace(",", "."))
+            m4.metric("Mevcut Hedef TL", f"{mevcut_hedef:,.0f} ₺".replace(",", "."))
+            m5.metric("Mevcut Fazla TL", f"{mevcut_fazla:,.0f} ₺".replace(",", "."))
+            
             st.markdown("---")
-            if toplam_stok > toplam_butce_siniri:
-                st.error(f"🔴 **KRİTİK BÜTÇE AŞIMI:** Toplam stok tutarı 6 Milyar TL sınırını **{toplam_stok - toplam_butce_siniri:,.0f} ₺** aşıyor!")
-            elif toplam_stok > ideal_hedef_butce:
-                st.warning(f"🟡 **EMNİYET BÖLGESİ:** Stok tutarı 5.8 Milyar TL ideal hedefinin üzerinde. 200 Milyon TL'lik emniyet payı kullanılıyor.")
-            else:
-                st.success("🟢 **BÜTÇE UYGUN:** Stok tutarı ideal 5.8 Milyar TL hedefinin altında güvenli bölgede.")
-
-            # Tablo ve Filtreleme
-            st.markdown("### 🔍 Ürün Bazlı Stok Detayları")
             
-            if 'Firma' in df.columns:
-                firma_listesi = ["Tümü"] + sorted(list(df['Firma'].dropna().unique()))
-                secilen_firma = st.selectbox("Tedarikçi Firma Filtresi", firma_listesi)
+            # --- 4. BÜTÇE HEDEFİ VE EMNİYET SEVİYESİ SEÇİMİ ---
+            st.markdown("### 🎯 2. Hedef Bütçe & Emniyet Seviyesi Ayarları")
+            
+            col_b1, col_b2 = st.columns([1, 1])
+            with col_b1:
+                hedef_butce_input = st.number_input(
+                    "Hedeflemek İstediğiniz Toplam Bütçe Sınırı (TL):",
+                    value=6200000000,
+                    step=50000000,
+                    format="%d",
+                    help="Örneğin 6.200.000.000 TL (6.2 Milyar) yazabilirsiniz."
+                )
+            
+            st.markdown("**Defa (Pareto) Sınıflarına Göre Emniyet Seviyeleri (Sadece 0 veya 5 ile biten değerler):**")
+            
+            # A, B, C, D, E Seviye Seçimleri (Sadece 5'in katları: 50, 55, 60, 65, 70, 75, 80, 85, 90, 95)
+            options_5 = list(range(50, 100, 5))
+            
+            p1, p2, p3, p4, p5 = st.columns(5)
+            with p1:
+                level_A = st.selectbox("A Grubu Emniyet %", options=options_5, index=options_5.index(90))
+            with p2:
+                level_B = st.selectbox("B Grubu Emniyet %", options=options_5, index=options_5.index(85))
+            with p3:
+                level_C = st.selectbox("C Grubu Emniyet %", options=options_5, index=options_5.index(80))
+            with p4:
+                level_D = st.selectbox("D Grubu Emniyet %", options=options_5, index=options_5.index(75))
+            with p5:
+                level_E = st.selectbox("E Grubu Emniyet %", options=options_5, index=options_5.index(70))
                 
-                if secilen_firma != "Tümü":
-                    goster_df = df[df['Firma'] == secilen_firma]
-                else:
-                    goster_df = df
+            level_map = {'A': level_A, 'B': level_B, 'C': level_C, 'D': level_D, 'E': level_E}
+            
+            # --- 5. YENİ DEĞERLERİ MATEMATİKSEL OLARAK HESAPLAMA ---
+            pareto_col_name = 'Defa Pareto' if 'Defa Pareto' in df.columns else ('Defa ABC' if 'Defa ABC' in df.columns else None)
+            
+            if pareto_col_name:
+                pareto_series = df[pareto_col_name].fillna('E').astype(str).str.strip().str.upper()
             else:
-                goster_df = df
-
-            st.dataframe(goster_df, use_container_width=True)
+                pareto_series = pd.Series(['E'] * len(df), index=df.index)
+                
+            df['Yeni_Emniyet_Seviyesi'] = pareto_series.map(level_map).fillna(75)
+            
+            # NORMSINV Formülü ile Yeni Min, Hedef, Optimum, Fazla TL Hesaplama
+            old_levels = df['Emniyet Seviyesi'].clip(50, 99) / 100.0
+            new_levels = df['Yeni_Emniyet_Seviyesi'] / 100.0
+            
+            z_old = norm.ppf(old_levels)
+            z_old = np.where(z_old == 0, 1e-5, z_old)
+            z_new = norm.ppf(new_levels)
+            
+            # S = Hedef - Min
+            df['Hedef_Min_Fark'] = df['Hedef TL'] - df['Min TL']
+            
+            # Yeni Min TL = Min TL * (Z_new / Z_old)
+            df['Yeni Min TL'] = df['Min TL'] * (z_new / z_old)
+            # Yeni Hedef TL = Yeni Min TL + Fark
+            df['Yeni Hedef TL'] = df['Yeni Min TL'] + df['Hedef_Min_Fark']
+            # Yeni Optimum TL = (Yeni Min TL + Yeni Hedef TL) / 2
+            df['Yeni Optimum TL'] = (df['Yeni Min TL'] + df['Yeni Hedef TL']) / 2.0
+            # Yeni Fazla TL = MAX(0, Stok TL - Yeni Hedef TL)
+            df['Yeni Fazla TL'] = np.maximum(0, df['Stok TL'] - df['Yeni Hedef TL'])
+            
+            # Yeni Toplamlar
+            yeni_toplam_hedef = df['Yeni Hedef TL'].sum()
+            yeni_toplam_fazla = df['Yeni Fazla TL'].sum()
+            
+            # --- 6. HESAPLANAN SONUÇ PANOLARI ---
+            st.markdown("---")
+            st.markdown("### 📈 3. Yeni Belirlenen Hedef Seviyeleri & Bütçe Analizi")
+            
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Yeni Hesaplanan Hedef TL", f"{yeni_toplam_hedef:,.0f} ₺".replace(",", "."))
+            k2.metric("Girdiğiniz Bütçe Sınırı", f"{hedef_butce_input:,.0f} ₺".replace(",", "."))
+            
+            fark = hedef_butce_input - yeni_toplam_hedef
+            if fark >= 0:
+                k3.metric("Kalan Bütçe Payı", f"{fark:,.0f} ₺".replace(",", "."))
+                st.success(f"🟢 **BÜTÇE UYGUN:** Belirlediğiniz emniyet seviyeleri ile oluşan Yeni Hedef TL ({yeni_toplam_hedef:,.0f} ₺), {hedef_butce_input:,.0f} ₺ bütçe sınırınızın altında kalmaktadır.")
+            else:
+                k3.metric("Bütçe Aşım Miktarı", f"{abs(fark):,.0f} ₺".replace(",", "."))
+                st.error(f"🔴 **BÜTÇE AŞILDI:** Oluşan Yeni Hedef TL ({yeni_toplam_hedef:,.0f} ₺), girdiğiniz {hedef_butce_input:,.0f} ₺ sınırını {abs(fark):,.0f} ₺ aşıyor. Lütfen emniyet seviyelerini düşürün.")
+                
+            k4.metric("Yeni Oluşan Fazla (Atıl) Stok TL", f"{yeni_toplam_fazla:,.0f} ₺".replace(",", "."))
+            
+            # --- 7. TABLO GÖSTERİMİ VE TEMİZ DÜZENLEME ---
+            st.markdown("### 📋 4. Ürün Bazlı Detay Tablosu")
+            
+            gosterim_sutunlari = [
+                'Ürün Kodu', 'Ürün', 'Firma', pareto_col_name, 'Emniyet Seviyesi', 
+                'Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL',
+                'Yeni_Emniyet_Seviyesi', 'Yeni Min TL', 'Yeni Optimum TL', 'Yeni Hedef TL', 'Yeni Fazla TL'
+            ]
+            gosterim_sutunlari = [c for c in gosterim_sutunlari if c in df.columns]
+            
+            df_display = df[gosterim_sutunlari].copy()
+            st.dataframe(df_display, use_container_width=True)
+            
+            # --- 8. DOĞRUDAN DÜZGÜN EXCEL (.XLSX) OLARAK İNDİRME BUTONU ---
+            st.markdown("### 📥 5. Sonuçları Excel (.xlsx) Formatında İndirin")
+            st.markdown("Aşağıdaki yeşil butona basarak sonuçları bozulmadan, düzgün Microsoft Excel tablosu olarak bilgisayarınıza indirebilirsiniz.")
+            
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                df[gosterim_sutunlari].to_excel(writer, index=False, sheet_name='Emniyet_Optimizasyonu')
+                
+            st.download_button(
+                label="🟢 Sonuçları Excel (.xlsx) Olarak İndir",
+                data=excel_buffer.getvalue(),
+                file_name=f"Emniyet_Seviyeleri_Optimizasyon_{hedef_butce_input}_TL.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
         except Exception as e:
-            st.error(f"Dosya okunurken bir hata oluştu: {e}")
-    else:
-        st.info("💡 Lütfen işlem yapmak için güncel 'Emniyet Seviyesi' Excel dosyanızı yukarıdaki alana yükleyin.")
+            st.error(f"Dosya işlenirken bir hata oluştu: {e}")
